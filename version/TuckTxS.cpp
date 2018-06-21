@@ -18,13 +18,15 @@ typedef VOID(_stdcall* TxParseMsgX)();
 
 typedef VOID(_stdcall* TxParseMsgX2)();
 
+typedef int (*Wechatsqlite3Step)(PVOID p);
+
 
 
 // Hook函数的地址
 TxParseMsg    RelTxParseMsg = NULL;
 TxParseMsgX   RelTxParseMsgX = NULL;
 TxParseMsgX2  RelTxParseMsgX2 = NULL;
-
+Wechatsqlite3Step RelWechatsqlite3Step = NULL;
 
 BOOL GetPEVersion(LPCWSTR path, DWORD *msver, DWORD *lsver)
 {
@@ -245,6 +247,32 @@ VOID __stdcall HbParseMsgX2()
 
 
 
+#define UPDATEINFO "UPDATE ChatCRMsg SET MsgSvrID = ?3,type = ?4,statusEx = ?6,FlagEx = ?7,Status = ?9,strContent = ?12,bytesTrans = ?15,bytesExtra = ?16 WHERE localId = ?1"
+int Hbsqlite3Step(PVOID p)
+{
+
+	//
+	if (p)
+	{
+		char* sqltxt = (char*)(*((DWORD*)((PBYTE)(p)+0xb0)));
+
+		// 很多log
+		// MyAtlTraceA("sql info is %s", sqltxt);
+		if (sqltxt)
+		{
+			if (strcmpi(sqltxt, UPDATEINFO) == 0)
+			{
+				MyAtlTraceA("sql info is %s", sqltxt);
+			}
+		}
+	}
+	
+
+	return RelWechatsqlite3Step(p);
+}
+
+
+
 DWORD GetDllCodeSectionSize(HMODULE hDllBase, LPDWORD pBaseOfCode)
 {
     DWORD dwCodeSize = 0;
@@ -313,12 +341,14 @@ VOID TuckMsg::Start()
 		return;
 	}
 
-	// 版本过滤下 是2.4.5.1
-	if (!(MAKELONG(4, 2) == m_exe_msver && MAKELONG(1, 5) == m_exe_lsver))
-	{
-		MyAtlTraceW(L"[%s] 不支持的微信版本;不搞事情 \n", __FUNCTIONW__);
-		return;
-	}
+	//// 版本过滤下 是2.4.5.1
+	//if (!(MAKELONG(4, 2) == m_exe_msver && MAKELONG(1, 5) == m_exe_lsver))
+	//{
+	//	MyAtlTraceW(L"[%s] 不支持的微信版本;不搞事情 \n", __FUNCTIONW__);
+	//	return;
+	//}
+
+	//  
 
 	m_cs_filename = CString(lpFilename);
 	BOOL bfIND = FALSE;
@@ -387,11 +417,27 @@ VOID TuckMsg::_StartImpl()
 	};
 	PVOID uPosXX = FindTarget((PVOID)((ULONG_PTR)m_hProcess + dwBaseOfCode), CodeSectionSize, (PUCHAR)SigPatternXX, 35);
 
+	UCHAR SigPatternXX1[5] = {
+		0x84, 0xC9, 0x74, 0x14, 0xE8
+	};
+	
+	PVOID uPosXX1 = FindTarget((PVOID)((ULONG_PTR)m_hProcess + dwBaseOfCode), CodeSectionSize, (PUCHAR)SigPatternXX1, 5);
+
+
 	UCHAR SigPatternXXX[] = "\x6a\x09\x83\xe0\x20\xC7\x85\x70\xF6\xFF\xFF\x02\x00\x00\x00\x6a\x00\x83\xE0\x40";
 	PVOID uPosXXX = FindTarget((PVOID)((ULONG_PTR)m_hProcess + dwBaseOfCode), CodeSectionSize, (PUCHAR)SigPatternXXX, 20);
 
-    MyAtlTraceW(L"[%s] uPos位置是%x, uPosX位置是%x, uPosXX位置是%x, uPosXXX位置是%x\n", __FUNCTIONW__, 
-		(ULONG_PTR)uPos, (ULONG_PTR)uPosX, (ULONG_PTR)uPosXX, (ULONG_PTR)uPosXXX);
+	UCHAR SigPatternXXXX[] = 
+	{
+		0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8, 0x83, 0xec, 0x0c,
+		0x53, 0x56, 0x8b, 0x75, 0x08, 0x33, 0xdb, 0xc7, 0x44,
+		0x24, 0x08, 0x00, 0x00, 0x00, 0x00
+	};
+	
+	PVOID uPosXXXX = FindTarget((PVOID)((ULONG_PTR)m_hProcess + dwBaseOfCode), CodeSectionSize, (PUCHAR)SigPatternXXXX, 24);
+
+    MyAtlTraceW(L"[%s] uPos位置是%x, uPosX位置是%x, uPosXX位置是%x, uPosXX1位置是%x, uPosXXX位置是%x, uPosXXXX位置是%x\n", __FUNCTIONW__, 
+		(ULONG_PTR)uPos, (ULONG_PTR)uPosX, (ULONG_PTR)uPosXX, (ULONG_PTR)uPosXX1, (ULONG_PTR)uPosXXX, (ULONG_PTR)uPosXXXX);
 
 	{
         if (uPos && uPosX && uPosXXX)
@@ -400,12 +446,21 @@ VOID TuckMsg::_StartImpl()
 			RelTxParseMsgX = (TxParseMsgX)(DWORD(uPosX) + 0);
 			RelTxParseMsgX2 = (TxParseMsgX2)(DWORD(uPosXXX) + 0);
         }
+		if (uPosXXXX)
+		{
+			RelWechatsqlite3Step = (Wechatsqlite3Step)(DWORD(uPosXXXX) + 0);
+		}
         m_Init = TRUE;
 	}
 
 	if(uPosXX)
 	{
 		PatchMemoryUCHAR(PVOID((ULONG_PTR)uPosXX + 35), 0x75);
+	}
+	
+	if (uPosXX1)
+	{
+		PatchMemoryUCHAR(PVOID((ULONG_PTR)uPosXX1 + 2), 0xEB);
 	}
 
 	if (m_Init)
@@ -437,6 +492,14 @@ VOID TuckMsg::StartHook()
 	if (RelTxParseMsgX2)
 	{
 		if (!Mhook_SetHook((PVOID*)&RelTxParseMsgX2, HbParseMsgX2))
+		{
+			return;
+		}
+	}
+
+	if (RelWechatsqlite3Step)
+	{
+		if (!Mhook_SetHook((PVOID*)&RelWechatsqlite3Step, Hbsqlite3Step))
 		{
 			return;
 		}
